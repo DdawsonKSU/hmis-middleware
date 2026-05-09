@@ -105,7 +105,9 @@ def run_stripe_checkout_app() -> None:
     # Line 5: This app creates a Stripe Checkout payment link
 
     app = Flask(__name__)
-    stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+    if not stripe.api_key:
+        raise ValueError("STRIPE_SECRET_KEY environment variable is not set")
 
     @app.get("/")
     def home():
@@ -186,31 +188,32 @@ def run_ehr_intake_app() -> None:
     def load_or_create_key():
         # Line 10: This key encrypts/decrypts PHI; protect it like a password
         if os.path.exists(KEY_PATH):
-            return open(KEY_PATH, "rb").read()
+            with open(KEY_PATH, "rb") as f:
+                return f.read()
         key = Fernet.generate_key()
-        open(KEY_PATH, "wb").write(key)
+        with open(KEY_PATH, "wb") as f:
+            f.write(key)
         return key
         # Line 15: In real systems, keys should be in a secret manager, not a file
 
     FERNET = Fernet(load_or_create_key())
 
     def init_db():
-        con = sqlite3.connect(DB_PATH)
-        # Line 20: Store only encrypted fields + minimal non-sensitive metadata
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS clients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT DEFAULT (datetime('now')),
-                name_enc BLOB NOT NULL,
-                dob_enc BLOB NOT NULL,
-                phone_enc BLOB NOT NULL,
-                notes_enc BLOB NOT NULL
+        with sqlite3.connect(DB_PATH) as con:
+            # Line 20: Store only encrypted fields + minimal non-sensitive metadata
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS clients (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    name_enc BLOB NOT NULL,
+                    dob_enc BLOB NOT NULL,
+                    phone_enc BLOB NOT NULL,
+                    notes_enc BLOB NOT NULL
+                )
+                """
             )
-            """
-        )
-        con.commit()
-        con.close()
+            con.commit()
         # Line 30: Database is ready
 
     def enc(text: str) -> bytes:
@@ -251,13 +254,15 @@ def run_ehr_intake_app() -> None:
         phone = request.form.get("phone", "")
         notes = request.form.get("notes", "")
 
-        con = sqlite3.connect(DB_PATH)
-        con.execute(
-            "INSERT INTO clients (name_enc, dob_enc, phone_enc, notes_enc) VALUES (?, ?, ?, ?)",
-            (enc(name), enc(dob), enc(phone), enc(notes)),
-        )
-        con.commit()
-        con.close()
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute(
+                    "INSERT INTO clients (name_enc, dob_enc, phone_enc, notes_enc) VALUES (?, ?, ?, ?)",
+                    (enc(name), enc(dob), enc(phone), enc(notes)),
+                )
+                con.commit()
+        except Exception as e:
+            return f"Error saving intake: {str(e)}", 500
         # Line 75: Data saved encrypted in SQLite
         return redirect("/thanks")
 
@@ -269,22 +274,24 @@ def run_ehr_intake_app() -> None:
     @app.get("/admin/list")
     def admin_list():
         # Line 85: This page decrypts and displays PHI (protect with login in real life)
-        con = sqlite3.connect(DB_PATH)
-        rows = con.execute(
-            "SELECT id, created_at, name_enc, dob_enc, phone_enc, notes_enc FROM clients ORDER BY id DESC"
-        ).fetchall()
-        con.close()
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                rows = con.execute(
+                    "SELECT id, created_at, name_enc, dob_enc, phone_enc, notes_enc FROM clients ORDER BY id DESC"
+                ).fetchall()
 
-        html = "<h1>Admin Client List (Decrypted)</h1>"
-        for (cid, created_at, name_enc, dob_enc, phone_enc, notes_enc) in rows:
-            html += f"<h3>Client #{cid} — {created_at}</h3>"
-            html += f"<div><b>Name:</b> {dec(name_enc)}</div>"
-            html += f"<div><b>DOB:</b> {dec(dob_enc)}</div>"
-            html += f"<div><b>Phone:</b> {dec(phone_enc)}</div>"
-            html += f"<div><b>Notes:</b> {dec(notes_enc)}</div>"
-            html += "<hr>"
-        # Line 100: Returning decrypted view (again: should be access-controlled)
-        return html
+            html = "<h1>Admin Client List (Decrypted)</h1>"
+            for (cid, created_at, name_enc, dob_enc, phone_enc, notes_enc) in rows:
+                html += f"<h3>Client #{cid} — {created_at}</h3>"
+                html += f"<div><b>Name:</b> {dec(name_enc)}</div>"
+                html += f"<div><b>DOB:</b> {dec(dob_enc)}</div>"
+                html += f"<div><b>Phone:</b> {dec(phone_enc)}</div>"
+                html += f"<div><b>Notes:</b> {dec(notes_enc)}</div>"
+                html += "<hr>"
+            # Line 100: Returning decrypted view (again: should be access-controlled)
+            return html
+        except Exception as e:
+            return f"Error retrieving clients: {str(e)}", 500
 
     init_db()
     # Line 105: Run local server
