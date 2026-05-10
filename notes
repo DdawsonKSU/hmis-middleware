@@ -1,0 +1,59 @@
+"""Combined notes + runnable examples
+
+This single file keeps all code from the page in one place.
+Each section is separated by a banner comment.
+
+Requirements (install what you need):
+  pip install lxml xmlsec flask stripe cryptography
+
+Notes:
+- Stripe requires STRIPE_SECRET_KEY in your environment.
+- The EHR intake example writes to local files (ehr.db, secret.key).
+- xmlsec decryption requires the right keys for the encrypted XML.
+"""
+
+# ============================================================
+# 1) .NET EncryptedXml decryption options (reference notes)
+# ============================================================
+# Symmetric keys (AES, etc.)
+#   - Create an EncryptedXml instance.
+#   - Load the EncryptedData element.
+#   - Call DecryptData using the same symmetric key used for encryption.
+#   - Replace the encrypted element with the decrypted plaintext.
+#
+# Asymmetric keys (RSA)
+#   - Create an EncryptedXml instance initialized with the XmlDocument.
+#   - Map the key name to the RSA private key via AddKeyNameMapping.
+#   - Call DecryptDocument.
+#   - This automatically decrypts the session key and the content.
+#
+# X.509 certificates
+#   - Load the certificate (with private key) from the local certificate store.
+#   - Create an EncryptedXml instance with the document.
+#   - Call DecryptDocument to automatically locate and use the corresponding private key.
+
+
+# ============================================================
+# 2) Python: decrypt encrypted XML (XML-Enc) with xmlsec
+# ============================================================
+from __future__ import annotations
+
+from typing import Optional
+
+
+def decrypt_xml(
+    encrypted_xml_bytes: bytes,
+    *,
+    rsa_private_key_pem: Optional[str] = None,
+    cert_pem: Optional[str] = None,
+    symmetric_key_bytes: Optional[bytes] = None,
+) -> bytes:
+    """Decrypts an XML document encrypted with XML Encryption (xenc:EncryptedData).
+
+    Use ONE of:
+      - symmetric_key_bytes (AES key used to encrypt)
+      - rsa_private_key_pem (RSA private key to unwrap session key)
+      - cert_pem + rsa_private_key_pem (cert helps identify key; private key does decryption)
+
+    Returns the decrypted XML bytes.
+    """
